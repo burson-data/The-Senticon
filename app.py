@@ -315,34 +315,52 @@ class NewsAnalyzerApp:
             st.warning("Tidak ada hasil untuk ditampilkan.")
             return
 
-        if is_excel_data:
-            # Standardize column merging for Excel data
-            base_columns = ['Title', 'Publish_Date', 'Journalist', 'Content', 'Sentiment', 'Confidence', 'Reasoning', 'Summary']
-            
-            # Special handling for title based on checkbox
-            if not config.get('excel_use_new_title', False) and 'Judul_New' in df.columns:
-                if 'Title' not in df.columns:
-                    df['Title'] = pd.NA
-                df['Title'] = df['Judul_New'].combine_first(df['Title'])
-                df.drop(columns=['Judul_New'], inplace=True)
-            elif 'Judul_New' in df.columns:
-                df.rename(columns={'Judul_New': 'Title_New'}, inplace=True)
+        # --- Data Consolidation and Cleaning ---
+        
+        # Determine the primary URL column from the original data
+        original_url_col = config.get('column_mapping', {}).get('url_column', 'URL')
 
+        # If it's from Excel, ensure the original URL column is named 'URL' for consistency
+        if is_excel_data and original_url_col != 'URL' and original_url_col in df.columns:
+            df.rename(columns={original_url_col: 'URL'}, inplace=True)
 
-            for base_col in base_columns:
-                new_col = f"{base_col}_New"
-                if new_col in df.columns:
-                    if base_col not in df.columns:
-                        df[base_col] = pd.NA
-                    df[base_col] = df[new_col].combine_first(df[base_col])
-                    df.drop(columns=[new_col], inplace=True)
-
-        url_col = 'URL' if 'URL' in df.columns else (config.get('column_mapping', {}).get('url_column') if is_excel_data else 'URL')
-        if url_col in df.columns:
-            df['Media'] = df[url_col].apply(lambda x: self.scraper._get_domain(x))
-
+        # Standardize column names from scraping/analysis (e.g., Judul_New -> Title)
         rename_map = {
+            'Judul_New': 'Title',
+            'Publish_Date_New': 'Publish_Date',
+            'Journalist_New': 'Journalist',
+            'Content_New': 'Content',
+            'Sentiment_New': 'Sentiment',
+            'Confidence_New': 'Confidence',
+            'Reasoning_New': 'Reasoning',
+            'Summary_New': 'Summary',
+            'Scraping_Method_New': 'Scraping_Method'
+        }
+        df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
+
+        # Merge new data into original columns if they exist
+        # For example, update 'Title' with new data, but keep old if new is null
+        for col_name in rename_map.values():
+            if col_name in df.columns:
+                # Find the original column name (case-insensitive search)
+                original_col = next((c for c in df.columns if c.lower() == col_name.lower() and c != col_name), None)
+                if original_col:
+                    df[original_col] = df[col_name].fillna(df[original_col])
+                    df.drop(columns=[col_name], inplace=True)
+                else:
+                    # If no original column, just rename the new one
+                    df.rename(columns={col_name: col_name}, inplace=True) # No real change, just for clarity
+
+        # --- Feature Engineering & Final Formatting ---
+
+        # 1. Create 'Media' column from the 'URL'
+        if 'URL' in df.columns:
+            df['Media'] = df['URL'].apply(lambda x: self.scraper._get_domain(x) if pd.notna(x) else '')
+
+        # 2. Final Rename to Indonesian user-friendly names
+        final_rename_map = {
             'URL': 'URL',
+            'Media': 'Media',
             'Title': 'Judul',
             'Publish_Date': 'Tanggal Rilis',
             'Journalist': 'Reporter',
@@ -353,17 +371,26 @@ class NewsAnalyzerApp:
             'Summary': 'Summary',
             'Scraping_Method': 'Scraping_Method'
         }
-        df.rename(columns=rename_map, inplace=True)
+        
+        # Rename only the columns that actually exist in the DataFrame
+        df.rename(columns={k: v for k, v in final_rename_map.items() if k in df.columns}, inplace=True)
 
-        desired_order = [
+        # 3. Define the final column order based on user request
+        final_desired_order = [
             'URL', 'Media', 'Judul', 'Tanggal Rilis', 'Reporter', 'Isi',
             'Sentiment', 'Confidence', 'Reasoning', 'Summary', 'Scraping_Method'
         ]
         
-        final_columns = [col for col in desired_order if col in df.columns]
-        other_columns = [col for col in df.columns if col not in final_columns]
-        df = df[final_columns + other_columns]
+        # Get a list of original columns to keep them at the end
+        original_cols_to_keep = [col for col in df.columns if col not in final_desired_order]
+        
+        # Filter the desired order to only include columns present in the df
+        final_columns_present = [col for col in final_desired_order if col in df.columns]
+        
+        # Combine the ordered columns with the remaining original ones
+        df = df[final_columns_present + original_cols_to_keep]
 
+        # --- Display in Streamlit UI ---
         tab1, tab2, tab3 = st.tabs(["📊 Ringkasan & Metrik", "📋 Data Lengkap", "📤 Export"])
 
         with tab1:
