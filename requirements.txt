@@ -8,3 +8,4 @@ playwright
 openai
 python-dotenv
 requests
+lxml_html_clean
