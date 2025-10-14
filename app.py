@@ -244,7 +244,8 @@ class NewsAnalyzerApp:
         if config['enable_scraping']:
             article_data = await self.scraper.scrape_article(url, timeout=config['scraping_timeout'])
             if article_data and article_data.get('content') and len(article_data.get('content', '').strip()) > 100:
-                result['Title_New'] = article_data.get('title', 'Gagal')
+                if config.get('excel_use_new_title', True):
+                    result['Judul_New'] = article_data.get('title', 'Gagal')
                 result['Publish_Date_New'] = article_data.get('publish_date', '')
                 result['Content_New'] = article_data.get('content', '')
                 result['Scraping_Method_New'] = article_data.get('method', 'unknown')
@@ -315,15 +316,21 @@ class NewsAnalyzerApp:
             return
 
         if is_excel_data:
-            for base_col in ['Title', 'Publish_Date', 'Journalist', 'Content', 'Sentiment', 'Confidence', 'Reasoning', 'Summary']:
+            if not config.get('excel_use_new_title', False):
+                # If not using new title, merge Title_New into Title
+                if 'Title_New' in df.columns:
+                    if 'Title' not in df.columns:
+                        df['Title'] = pd.NA
+                    df['Title'] = df['Title_New'].combine_first(df['Title'])
+                    df.drop(columns=['Title_New'], inplace=True)
+            
+            # Merge other _New columns
+            for base_col in ['Publish_Date', 'Journalist', 'Content', 'Sentiment', 'Confidence', 'Reasoning', 'Summary']:
                 new_col = f"{base_col}_New"
                 if new_col in df.columns:
-                    # If base column doesn't exist, create it
                     if base_col not in df.columns:
                         df[base_col] = pd.NA
-                    # Merge new data into base column, prioritizing the new data
                     df[base_col] = df[new_col].combine_first(df[base_col])
-                    # Drop the now-redundant _New column
                     df.drop(columns=[new_col], inplace=True)
 
         url_col = 'URL' if 'URL' in df.columns else (config.get('column_mapping', {}).get('url_column') if is_excel_data else 'URL')
@@ -435,6 +442,10 @@ class NewsAnalyzerApp:
             if uploaded_file:
                 df = pd.read_excel(uploaded_file)
                 st.success(f"✅ Berhasil membaca {len(df)} baris dari {uploaded_file.name}")
+                
+                excel_use_new_title = st.checkbox("Tarik Judul Baru (membuat kolom Judul_New)", value=True, help="Jika dicentang, judul baru akan ditarik dan disimpan di kolom 'Judul_New'. Jika tidak, judul baru akan menimpa kolom judul yang sudah ada.")
+                config['excel_use_new_title'] = excel_use_new_title
+
                 config['column_mapping'] = self.get_column_mapping(df)
                 active_input_method = "Upload File Excel"
 
