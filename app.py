@@ -316,16 +316,20 @@ class NewsAnalyzerApp:
             return
 
         if is_excel_data:
-            if not config.get('excel_use_new_title', False):
-                # If not using new title, merge Title_New into Title
-                if 'Title_New' in df.columns:
-                    if 'Title' not in df.columns:
-                        df['Title'] = pd.NA
-                    df['Title'] = df['Title_New'].combine_first(df['Title'])
-                    df.drop(columns=['Title_New'], inplace=True)
+            # Standardize column merging for Excel data
+            base_columns = ['Title', 'Publish_Date', 'Journalist', 'Content', 'Sentiment', 'Confidence', 'Reasoning', 'Summary']
             
-            # Merge other _New columns
-            for base_col in ['Publish_Date', 'Journalist', 'Content', 'Sentiment', 'Confidence', 'Reasoning', 'Summary']:
+            # Special handling for title based on checkbox
+            if not config.get('excel_use_new_title', False) and 'Judul_New' in df.columns:
+                if 'Title' not in df.columns:
+                    df['Title'] = pd.NA
+                df['Title'] = df['Judul_New'].combine_first(df['Title'])
+                df.drop(columns=['Judul_New'], inplace=True)
+            elif 'Judul_New' in df.columns:
+                df.rename(columns={'Judul_New': 'Title_New'}, inplace=True)
+
+
+            for base_col in base_columns:
                 new_col = f"{base_col}_New"
                 if new_col in df.columns:
                     if base_col not in df.columns:
@@ -338,18 +342,23 @@ class NewsAnalyzerApp:
             df['Media'] = df[url_col].apply(lambda x: self.scraper._get_domain(x))
 
         rename_map = {
+            'URL': 'URL',
             'Title': 'Judul',
             'Publish_Date': 'Tanggal Rilis',
             'Journalist': 'Reporter',
-            'Content': 'Isi'
+            'Content': 'Isi',
+            'Sentiment': 'Sentiment',
+            'Confidence': 'Confidence',
+            'Reasoning': 'Reasoning',
+            'Summary': 'Summary',
+            'Scraping_Method': 'Scraping_Method'
         }
         df.rename(columns=rename_map, inplace=True)
 
-        desired_order = ['Media', 'Judul']
-        if config.get('enable_date', True) and 'Tanggal Rilis' in df.columns:
-            desired_order.append('Tanggal Rilis')
-        
-        desired_order.extend(['Reporter', 'Isi'])
+        desired_order = [
+            'URL', 'Media', 'Judul', 'Tanggal Rilis', 'Reporter', 'Isi',
+            'Sentiment', 'Confidence', 'Reasoning', 'Summary', 'Scraping_Method'
+        ]
         
         final_columns = [col for col in desired_order if col in df.columns]
         other_columns = [col for col in df.columns if col not in final_columns]
