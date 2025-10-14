@@ -3,7 +3,6 @@ import re
 from typing import Dict, Optional
 from openai import OpenAI
 
-from config import GEMINI_BASE_URL, GEMINI_API_KEY
 
 class SentimentAnalyzer:
     def __init__(self):
