@@ -1,19 +1,14 @@
 from typing import Dict, Optional
 from openai import OpenAI
 
-
 class ArticleSummarizer:
-    def __init__(self):
-        self.api_key = GEMINI_API_KEY
+    def __init__(self, api_key: str, base_url: str):
+        self.api_key = api_key
+        self.base_url = base_url
         self.model_name = 'models/gemini-2.5-flash'
         self.client = None
-        if self.api_key and GEMINI_BASE_URL:
-            self.client = OpenAI(api_key=self.api_key, base_url=GEMINI_BASE_URL)
-
-    def set_api_key(self, api_key: str):
-        self.api_key = api_key
-        if self.api_key and GEMINI_BASE_URL:
-            self.client = OpenAI(api_key=self.api_key, base_url=GEMINI_BASE_URL)
+        if self.api_key and self.base_url:
+            self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
     def _create_summary_prompt(self, content: str, config: Dict) -> str:
         summary_type = config.get('summary_type', 'Ringkas')
