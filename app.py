@@ -19,15 +19,15 @@ from summarizer import ArticleSummarizer
 class NewsAnalyzerApp:
     def __init__(self):
         self.scraper = NewsScraper()
-        self.sentiment_analyzer = SentimentAnalyzer()
-        self.journalist_detector = JournalistDetector()
-        self.summarizer = ArticleSummarizer()
         
-        # Set API key from Streamlit secrets
-        GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
-        if GEMINI_API_KEY:
-            self.sentiment_analyzer.set_api_key(GEMINI_API_KEY)
-            self.summarizer.set_api_key(GEMINI_API_KEY)
+        # Get credentials from Streamlit secrets
+        gemini_api_key = st.secrets.get("GEMINI_API_KEY")
+        gemini_base_url = st.secrets.get("GEMINI_BASE_URL")
+
+        # Initialize AI modules with credentials
+        self.sentiment_analyzer = SentimentAnalyzer(api_key=gemini_api_key, base_url=gemini_base_url)
+        self.journalist_detector = JournalistDetector()
+        self.summarizer = ArticleSummarizer(api_key=gemini_api_key, base_url=gemini_base_url)
         
         # Apply nest_asyncio to allow running asyncio in Streamlit
         nest_asyncio.apply()
@@ -566,8 +566,8 @@ class NewsAnalyzerApp:
         if not any([config['enable_scraping'], config['enable_sentiment'], config['enable_journalist'], config['enable_summarize']]):
             warnings.append("⚠️ Pilih minimal satu fungsi untuk digunakan")
         
-        GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
-        if not GEMINI_API_KEY and (config['enable_sentiment'] or config['enable_summarize']):
+        gemini_api_key = st.secrets.get("GEMINI_API_KEY")
+        if not gemini_api_key and (config['enable_sentiment'] or config['enable_summarize']):
             features = []
             if config['enable_sentiment']:
                 features.append("analisis sentimen")
