@@ -314,15 +314,27 @@ class NewsAnalyzerApp:
             st.warning("Tidak ada hasil untuk ditampilkan.")
             return
 
+        if is_excel_data:
+            for base_col in ['Title', 'Publish_Date', 'Journalist', 'Content', 'Sentiment', 'Confidence', 'Reasoning', 'Summary']:
+                new_col = f"{base_col}_New"
+                if new_col in df.columns:
+                    # If base column doesn't exist, create it
+                    if base_col not in df.columns:
+                        df[base_col] = pd.NA
+                    # Merge new data into base column, prioritizing the new data
+                    df[base_col] = df[new_col].combine_first(df[base_col])
+                    # Drop the now-redundant _New column
+                    df.drop(columns=[new_col], inplace=True)
+
         url_col = 'URL' if 'URL' in df.columns else (config.get('column_mapping', {}).get('url_column') if is_excel_data else 'URL')
         if url_col in df.columns:
             df['Media'] = df[url_col].apply(lambda x: self.scraper._get_domain(x))
 
         rename_map = {
-            'Title': 'Judul', 'Title_New': 'Judul', 
-            'Publish_Date': 'Tanggal Rilis', 'Publish_Date_New': 'Tanggal Rilis',
-            'Journalist': 'Reporter', 'Journalist_New': 'Reporter',
-            'Content': 'Isi', 'Content_New': 'Isi'
+            'Title': 'Judul',
+            'Publish_Date': 'Tanggal Rilis',
+            'Journalist': 'Reporter',
+            'Content': 'Isi'
         }
         df.rename(columns=rename_map, inplace=True)
 
