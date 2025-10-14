@@ -1,0 +1,10 @@
+streamlit
+pandas
+openpyxl
+nest_asyncio
+beautifulsoup4
+newspaper3k
+playwright
+openai
+python-dotenv
+requests
