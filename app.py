@@ -244,7 +244,8 @@ class NewsAnalyzerApp:
         if config['enable_scraping']:
             article_data = await self.scraper.scrape_article(url, timeout=config['scraping_timeout'])
             if article_data and article_data.get('content') and len(article_data.get('content', '').strip()) > 100:
-                if config.get('excel_use_new_title', True):
+                # If the user wants to use the title from the Excel file, we don't scrape for a new one.
+                if not config.get('excel_use_existing_title', False):
                     result['Judul_New'] = article_data.get('title', 'Gagal')
                 result['Publish_Date_New'] = article_data.get('publish_date', '')
                 result['Content_New'] = article_data.get('content', '')
@@ -453,7 +454,7 @@ class NewsAnalyzerApp:
         config = self.setup_sidebar()
         
         st.header("📝 Input Data")
-        tab1, tab2 = st.tabs(["🔗 URL Manual", "📁 Upload File Excel"])
+        tab1, tab2, tab3 = st.tabs(["🔗 URL Manual", "📁 Upload File Excel", "📖 Panduan Penggunaan"])
         
         active_input_method, url_data_list, df = None, [], None
         
@@ -479,11 +480,19 @@ class NewsAnalyzerApp:
                 df = pd.read_excel(uploaded_file)
                 st.success(f"✅ Berhasil membaca {len(df)} baris dari {uploaded_file.name}")
                 
-                excel_use_new_title = st.checkbox("Tarik Judul Baru (membuat kolom Judul_New)", value=True, help="Jika dicentang, judul baru akan ditarik dan disimpan di kolom 'Judul_New'. Jika tidak, judul baru akan menimpa kolom judul yang sudah ada.")
-                config['excel_use_new_title'] = excel_use_new_title
+                excel_use_existing_title = st.checkbox("Gunakan Judul dari file excel", value=True, help="Jika dicentang, judul dari file excel akan digunakan. Jika tidak, judul baru akan ditarik dari URL.")
+                config['excel_use_existing_title'] = excel_use_existing_title
 
                 config['column_mapping'] = self.get_column_mapping(df)
                 active_input_method = "Upload File Excel"
+        
+        with tab3:
+            st.header("📖 Panduan Penggunaan Aplikasi")
+            try:
+                with open("PANDUAN_PENGGUNAAN.md", "r", encoding="utf-8") as f:
+                    st.markdown(f.read(), unsafe_allow_html=True)
+            except FileNotFoundError:
+                st.error("File panduan (PANDUAN_PENGGUNAAN.md) tidak ditemukan.")
 
         if not active_input_method:
             st.warning("⚠️ Masukkan minimal satu URL atau upload file Excel")
