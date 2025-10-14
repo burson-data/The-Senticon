@@ -207,7 +207,7 @@ class NewsAnalyzerApp:
         except Exception as e:
             return {'URL': url, 'Title': f'Error: {str(e)}', 'Content': 'Error'}
         finally:
-            with progress_info['lock']:
+            async with progress_info['lock']:
                 progress_info['completed'] += 1
                 progress = progress_info['completed'] / progress_info['total']
                 progress_info['bar'].progress(progress)
@@ -228,22 +228,108 @@ class NewsAnalyzerApp:
         progress_info['text'].text("✅ Semua proses selesai!")
         return ordered_results
 
-    def display_results(self, results, config: Dict):
-        df = pd.DataFrame(results) if results else pd.DataFrame()
+    async def process_single_row_async(self, row_tuple, column_mapping: Dict, config: Dict, progress_info: Dict):
+        index, row = row_tuple
+        
+        result = row.to_dict()
+        result['original_index'] = index
+        url = row.get(column_mapping['url_column'], '')
+        
+        if not url:
+            return result
+
+        snippet = str(row.get(column_mapping.get('snippet_column'), '')) if column_mapping.get('snippet_column') else ""
+        content, scraping_success, article_data = "", False, {}
+
+        if config['enable_scraping']:
+            article_data = await self.scraper.scrape_article(url, timeout=config['scraping_timeout'])
+            if article_data and article_data.get('content') and len(article_data.get('content', '').strip()) > 100:
+                result['Title_New'] = article_data.get('title', 'Gagal')
+                result['Publish_Date_New'] = article_data.get('publish_date', '')
+                result['Content_New'] = article_data.get('content', '')
+                result['Scraping_Method_New'] = article_data.get('method', 'unknown')
+                content, scraping_success = article_data.get('content', ''), True
+            else:
+                result.update({'Content_New': 'Gagal scraping', 'Scraping_Method_New': 'failed'})
+        
+        analysis_text, analysis_source = "", "none"
+        title = result.get('Title_New', row.get('Title', ''))
+
+        if scraping_success and content:
+            analysis_text, analysis_source = content, "scraped_content"
+        elif title:
+            analysis_text, analysis_source = title, "title"
+        elif snippet:
+            analysis_text, analysis_source = snippet, "snippet"
+
+        if config['enable_journalist'] and analysis_text:
+            result['Journalist_New'] = self.journalist_detector.detect_journalist(article_data, analysis_text)
+            result['Journalist_Source'] = analysis_source
+
+        if config['enable_sentiment'] and config['sentiment_context'] and analysis_text:
+            sentiment = self.sentiment_analyzer.analyze_sentiment(analysis_text, config['sentiment_context'])
+            if sentiment:
+                result.update({
+                    'Sentiment_New': sentiment.get('sentiment', 'Gagal'), 'Confidence_New': sentiment.get('confidence', ''),
+                    'Reasoning_New': sentiment.get('reasoning', ''), 'Sentiment_Source': analysis_source
+                })
+            else:
+                result.update({'Sentiment_New': 'Gagal AI', 'Sentiment_Source': analysis_source})
+
+        if config['enable_summarize'] and len(analysis_text.strip()) > 200:
+            summary = self.summarizer.summarize_article(analysis_text, config['summarize_config'])
+            result['Summary_New'] = summary.get('summary', 'Gagal') if summary else 'Gagal AI'
+            result['Summary_Source'] = analysis_source
+        
+        return result
+    
+    async def process_excel_data_async(self, df: pd.DataFrame, column_mapping: Dict, config: Dict) -> pd.DataFrame:
+        progress_info = {
+            'lock': asyncio.Lock(), 'completed': 0, 'total': len(df),
+            'bar': st.progress(0), 'text': st.empty()
+        }
+
+        tasks = []
+        for row_tuple in df.iterrows():
+            task = self.process_single_row_async(row_tuple, column_mapping, config, progress_info)
+            tasks.append(task)
+
+        processed_results = await asyncio.gather(*tasks)
+        
+        results_df = pd.DataFrame(processed_results).set_index('original_index').sort_index()
+        
+        progress_info['text'].text("✅ Semua proses selesai!")
+        return results_df
+
+    def display_results(self, results, config: Dict, is_excel_data: bool = False):
+        if isinstance(results, pd.DataFrame):
+            df = results
+        elif results:
+            df = pd.DataFrame(results)
+        else:
+            st.warning("Tidak ada hasil untuk ditampilkan.")
+            return
+
         if df.empty:
             st.warning("Tidak ada hasil untuk ditampilkan.")
             return
 
-        if 'URL' in df.columns:
-            df['Media'] = df['URL'].apply(lambda x: self.scraper._get_domain(x))
-        
+        url_col = 'URL' if 'URL' in df.columns else (config.get('column_mapping', {}).get('url_column') if is_excel_data else 'URL')
+        if url_col in df.columns:
+            df['Media'] = df[url_col].apply(lambda x: self.scraper._get_domain(x))
+
         rename_map = {
-            'Title': 'Judul', 'Publish_Date': 'Tanggal Rilis', 'Journalist': 'Reporter', 'Content': 'Isi'
+            'Title': 'Judul', 'Title_New': 'Judul', 
+            'Publish_Date': 'Tanggal Rilis', 'Publish_Date_New': 'Tanggal Rilis',
+            'Journalist': 'Reporter', 'Journalist_New': 'Reporter',
+            'Content': 'Isi', 'Content_New': 'Isi'
         }
         df.rename(columns=rename_map, inplace=True)
 
         desired_order = ['Media', 'Judul']
-        if config.get('enable_date', True) and 'Tanggal Rilis' in df.columns: desired_order.append('Tanggal Rilis')
+        if config.get('enable_date', True) and 'Tanggal Rilis' in df.columns:
+            desired_order.append('Tanggal Rilis')
+        
         desired_order.extend(['Reporter', 'Isi'])
         
         final_columns = [col for col in desired_order if col in df.columns]
@@ -251,37 +337,61 @@ class NewsAnalyzerApp:
         df = df[final_columns + other_columns]
 
         tab1, tab2, tab3 = st.tabs(["📊 Ringkasan & Metrik", "📋 Data Lengkap", "📤 Export"])
+
         with tab1:
-            self.display_metrics_and_summary(df, config)
+            self.display_metrics_and_summary(df, config, is_excel_data)
+
         with tab2:
             st.subheader("📋 Preview Hasil Analisis")
-            st.dataframe(df, use_container_width=True)
-        with tab3:
-            self.display_export_section(df, config)
+            df_display = df.copy()
+            text_columns = ['Isi', 'Summary', 'Summary_New', 'Reasoning', 'Reasoning_New']
+            for col in text_columns:
+                if col in df_display.columns:
+                    df_display[col] = df_display[col].astype(str).apply(lambda x: x[:150] + "..." if len(x) > 150 else x)
+            st.dataframe(df_display, use_container_width=True)
+            st.caption("Data lengkap tersedia di tab Export.")
 
-    def display_metrics_and_summary(self, df: pd.DataFrame, config: Dict):
+        with tab3:
+            self.display_export_section(df, config, is_excel_data)
+
+    def display_metrics_and_summary(self, df: pd.DataFrame, config: Dict, is_excel_data: bool):
         st.subheader("📈 Metrik Kinerja")
-        total = len(df)
-        scraping_success = len(df[df['Scraping_Method'].str.contains('newspaper3k|manual|playwright', na=False)]) if 'Scraping_Method' in df.columns else 0
+        total_count = len(df)
         
-        col1, col2 = st.columns(2)
-        col1.metric("Total Data Diproses", total)
+        scraping_success = 0
         if config.get('enable_scraping'):
-            rate = (scraping_success / total * 100) if total > 0 else 0
-            col2.metric("Scraping Berhasil", f"{scraping_success}/{total}", f"{rate:.1f}%")
+            method_col = 'Scraping_Method_New' if 'Scraping_Method_New' in df.columns else 'Scraping_Method'
+            if method_col in df.columns:
+                scraping_success = len(df[df[method_col].str.contains('newspaper3k|manual|simple|playwright', na=False)])
+
+        col1, col2 = st.columns(2)
+        col1.metric("Total Data Diproses", total_count)
+        if config.get('enable_scraping'):
+            success_rate = (scraping_success / total_count * 100) if total_count > 0 else 0
+            col2.metric("Scraping Berhasil", f"{scraping_success}/{total_count}", f"{success_rate:.1f}%")
         
         active_funcs = {'📄 Full Teks': 'enable_scraping', '📅 Tanggal': 'enable_date', '😊 Sentimen': 'enable_sentiment', '👤 Jurnalis': 'enable_journalist', '📝 Summarize': 'enable_summarize'}
         st.info(f"**Fungsi Aktif:** {' | '.join([f for f, e in active_funcs.items() if config.get(e)])}")
 
-    def display_export_section(self, df: pd.DataFrame, config: Dict):
+    def display_export_section(self, df: pd.DataFrame, config: Dict, is_excel_data: bool):
         st.subheader("📤 Export Data ke Excel")
+        
         excel_buffer = BytesIO()
         df.to_excel(excel_buffer, index=False, engine='openpyxl')
+        excel_buffer.seek(0)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"news_analysis_{timestamp}.xlsx"
+        data_type = "excel" if is_excel_data else "manual"
+        features = "_".join(k for k, v in {'ft': 'enable_scraping', 'sent': 'enable_sentiment', 'jour': 'enable_journalist', 'sum': 'enable_summarize'}.items() if config.get(v))
+        filename = f"news_analysis_{data_type}_{features}_{timestamp}.xlsx"
         
-        st.download_button(label="📥 Download Laporan Excel", data=excel_buffer.getvalue(), file_name=filename, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        st.download_button(
+            label="📥 Download Laporan Excel",
+            data=excel_buffer.getvalue(),
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
 
     def run(self):
         self.setup_page()
@@ -327,8 +437,8 @@ class NewsAnalyzerApp:
                     results = loop.run_until_complete(self.process_urls_manual_async(url_data_list, config))
                     self.display_results(results, config)
                 elif df is not None:
-                    # Placeholder for Excel processing logic
-                    st.info("Excel processing to be implemented.")
+                    results_df = loop.run_until_complete(self.process_excel_data_async(df, config['column_mapping'], config))
+                    self.display_results(results_df, config, is_excel_data=True)
 
 if __name__ == "__main__":
     app = NewsAnalyzerApp()
