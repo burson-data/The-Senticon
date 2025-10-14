@@ -1,7 +1,6 @@
 from typing import Dict, Optional
 from openai import OpenAI
 
-from config import GEMINI_BASE_URL, GEMINI_API_KEY
 
 class ArticleSummarizer:
     def __init__(self):
