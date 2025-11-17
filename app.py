@@ -115,8 +115,8 @@ class NewsAnalyzerApp:
             st.header("⚙️ Konfigurasi")
             
             with st.expander("🎯 **Pilih Fungsi Analisis**", expanded=True):
-                enable_scraping = st.checkbox("📄 Tarik Full Teks Berita", value=True, help="Mengambil konten lengkap berita dari URL")
-                enable_date = st.checkbox("📅 Deteksi Tanggal Rilis", value=True, help="Mendeteksi tanggal publikasi artikel")
+                enable_scraping = st.checkbox("📄 Tarik Full Teks Berita", value=False, help="Mengambil konten lengkap berita dari URL")
+                enable_date = st.checkbox("📅 Deteksi Tanggal Rilis", value=False, help="Mendeteksi tanggal publikasi artikel")
                 enable_sentiment = st.checkbox("😊 Analisis Sentimen", value=False, help="Menganalisis sentimen berdasarkan konteks")
                 enable_journalist = st.checkbox("👤 Deteksi Jurnalis", value=False, help="Mendeteksi nama penulis/jurnalis")
                 enable_summarize = st.checkbox("📝 Summarize Artikel", value=False, help="Membuat ringkasan artikel menggunakan AI")
