@@ -15,6 +15,7 @@ from scraper import NewsScraper
 from sentiment_analyzer import SentimentAnalyzer
 from journalist_detector import JournalistDetector
 from summarizer import ArticleSummarizer
+from category_analyzer import CategoryAnalyzer
 
 class NewsAnalyzerApp:
     def __init__(self):
@@ -34,6 +35,7 @@ class NewsAnalyzerApp:
         self.sentiment_analyzer = SentimentAnalyzer(api_key=gemini_api_key, base_url=gemini_base_url)
         self.journalist_detector = JournalistDetector()
         self.summarizer = ArticleSummarizer(api_key=gemini_api_key, base_url=gemini_base_url)
+        self.category_analyzer = CategoryAnalyzer(api_key=gemini_api_key, base_url=gemini_base_url)
         
         # Apply nest_asyncio to allow running asyncio in Streamlit
         nest_asyncio.apply()
@@ -118,10 +120,18 @@ class NewsAnalyzerApp:
                 enable_sentiment = st.checkbox("😊 Analisis Sentimen", value=False, help="Menganalisis sentimen berdasarkan konteks")
                 enable_journalist = st.checkbox("👤 Deteksi Jurnalis", value=False, help="Mendeteksi nama penulis/jurnalis")
                 enable_summarize = st.checkbox("📝 Summarize Artikel", value=False, help="Membuat ringkasan artikel menggunakan AI")
+                enable_categorization = st.checkbox("📊 Kategorisasi Berita", value=False, help="Mengklasifikasikan berita ke dalam kategori custom")
 
             sentiment_context = None
             summarize_config = {}
+            categorization_config = {}
             scraping_timeout = 30
+
+            analysis_source_option = st.selectbox(
+                "**Sumber Analisis Utama**",
+                ["Teks Lengkap (Fallback ke Judul)", "Hanya Judul"],
+                help="Pilih sumber teks untuk semua analisis. 'Fallback' akan otomatis menggunakan judul jika konten gagal diambil."
+            )
 
             if enable_sentiment:
                 with st.expander("😊 **Konfigurasi Sentimen**"):
@@ -138,6 +148,19 @@ class NewsAnalyzerApp:
                     if summarize_config['summary_type'] == 'Custom':
                         summarize_config['custom_instruction'] = st.text_area("Instruksi Custom", placeholder="Contoh: Buat ringkasan format bullet points", help="Instruksi khusus")
 
+            if enable_categorization:
+                with st.expander("📊 **Konfigurasi Kategori**"):
+                    categories_input = st.text_area(
+                        "Daftar Kategori (satu per baris)", 
+                        placeholder="Politik: Berita terkait pemilu, kebijakan pemerintah.\nEkonomi: Berita tentang saham, investasi, bisnis.\nOlahraga", 
+                        help="Format: `Nama Kategori: [Penjelasan Opsional]`. Berikan penjelasan agar AI lebih akurat."
+                    )
+                    
+                    categories_with_desc = [cat.strip() for cat in categories_input.split('\n') if cat.strip()]
+                    categorization_config['categories_with_desc'] = categories_with_desc
+                    # For backward compatibility and simple use cases, we can extract just the names
+                    categorization_config['categories'] = [cat.split(':', 1)[0].strip() for cat in categories_with_desc]
+
             if enable_scraping:
                 with st.expander("🔧 **Opsi Scraping**"):
                     scraping_timeout = st.slider("Timeout (detik)", 10, 60, 30, help="Waktu tunggu maksimal untuk setiap URL")
@@ -145,8 +168,11 @@ class NewsAnalyzerApp:
         return {
             'enable_scraping': enable_scraping, 'enable_date': enable_date,
             'enable_sentiment': enable_sentiment, 'enable_journalist': enable_journalist,
-            'enable_summarize': enable_summarize, 'sentiment_context': sentiment_context,
-            'summarize_config': summarize_config, 'scraping_timeout': scraping_timeout
+            'enable_summarize': enable_summarize, 'enable_categorization': enable_categorization,
+            'sentiment_context': sentiment_context,
+            'analysis_source_option': analysis_source_option,
+            'summarize_config': summarize_config, 'categorization_config': categorization_config,
+            'scraping_timeout': scraping_timeout
         }
 
     def get_column_mapping(self, df: pd.DataFrame):
@@ -169,39 +195,69 @@ class NewsAnalyzerApp:
                 result['Title'] = manual_title
 
             content, scraping_success, article_data = "", False, {}
-            if config['enable_scraping']:
-                article_data = await self.scraper.scrape_article(url, timeout=config['scraping_timeout'])
+            
+            # --- Smart Scraping Logic ---
+            # Determine if any form of scraping is needed at all.
+            is_full_scrape_needed = config['enable_scraping']
+            is_metadata_needed = config['enable_date'] or config['enable_journalist']
+            is_content_needed_for_analysis = config['analysis_source_option'] == 'Teks Lengkap (Fallback ke Judul)' and (config['enable_sentiment'] or config['enable_summarize'] or config['enable_categorization'])
+
+            needs_scraping = is_full_scrape_needed or is_metadata_needed or is_content_needed_for_analysis
+
+            if needs_scraping:
+                # If full text is explicitly requested, do a full scrape. Otherwise, a basic scrape might suffice.
+                basic_only = not is_full_scrape_needed
+                article_data = await self.scraper.scrape_article(url, timeout=config['scraping_timeout'], basic_only=basic_only)
+                
                 if article_data and article_data.get('content') and len(article_data.get('content', '').strip()) > 100:
                     if 'Title' not in result: result['Title'] = article_data.get('title', 'Gagal mengambil judul')
-                    result['Publish_Date'] = article_data.get('publish_date', '')
-                    result['Content'] = article_data.get('content', '')
+                    if config['enable_date']: result['Publish_Date'] = article_data.get('publish_date', '')
+                    if is_full_scrape_needed: result['Content'] = article_data.get('content', '')
+                    
                     result['Scraping_Method'] = article_data.get('method', 'unknown')
                     content, scraping_success = article_data.get('content', ''), True
                 else:
+                    # Even if scraping fails, we might get a title
                     if 'Title' not in result: result['Title'] = self.scraper.get_title_newspaper3k(url)
                     result.update({'Content': 'Gagal scraping', 'Scraping_Method': 'failed'})
-            else:
-                article_data = await self.scraper.scrape_article(url, basic_only=True)
-                if article_data and len(article_data.get('content', '').strip()) > 100:
-                    content, scraping_success = article_data.get('content', ''), True
-
-            if config['enable_journalist']:
-                result['Journalist'] = self.journalist_detector.detect_journalist(article_data, content) if scraping_success and content else 'Tidak diproses'
             
+            # --- Journalist Detection ---
+            # This can only run if scraping was performed and successful.
+            if config['enable_journalist']:
+                if scraping_success and content:
+                    result['Journalist'] = self.journalist_detector.detect_journalist(article_data, content)
+                else:
+                    result['Journalist'] = 'Tidak diproses (scraping gagal/dilewati)'
+            
+            # --- Smart Text Selection for Analysis ---
             analysis_text, analysis_source = "", "none"
-            if scraping_success and len(content.strip()) > 100:
-                analysis_text, analysis_source = content, "content"
-            elif result.get('Title') and result['Title'] != 'Gagal mengambil judul':
-                analysis_text, analysis_source = result['Title'], "title"
+            title = result.get('Title', '')
+            has_valid_content = scraping_success and content and len(content.strip()) > 100
+            has_valid_title = title and title != 'Gagal mengambil judul'
 
+            if config['analysis_source_option'] == 'Hanya Judul':
+                if has_valid_title:
+                    analysis_text, analysis_source = title, "title_only"
+            else: # Teks Lengkap (Fallback ke Judul)
+                if has_valid_content:
+                    analysis_text, analysis_source = content, "content"
+                elif has_valid_title:
+                    analysis_text, analysis_source = title, "title_fallback"
+            
+            result['Analysis_Source'] = analysis_source
+
+            # --- Run Analyses on the selected text ---
             if config['enable_sentiment'] and config['sentiment_context'] and analysis_text:
                 sentiment = self.sentiment_analyzer.analyze_sentiment(analysis_text, config['sentiment_context'])
                 result.update(sentiment or {'Sentiment': 'Gagal analisis AI'})
-                result['Sentiment_Source'] = analysis_source
             
-            if config['enable_summarize'] and scraping_success and len(content.strip()) > 200:
-                summary = self.summarizer.summarize_article(content, config['summarize_config'])
+            if config['enable_summarize'] and analysis_text and len(analysis_text.strip()) > 50: # Lowered threshold for title summarization
+                summary = self.summarizer.summarize_article(analysis_text, config['summarize_config'])
                 result['Summary'] = summary.get('summary', 'Gagal membuat ringkasan')
+
+            if config['enable_categorization'] and analysis_text and config.get('categorization_config', {}).get('categories_with_desc'):
+                category = self.category_analyzer.analyze_category(analysis_text, config['categorization_config']['categories_with_desc'])
+                result['Category'] = category
 
             return result
         except Exception as e:
@@ -254,34 +310,48 @@ class NewsAnalyzerApp:
             else:
                 result.update({'Content_New': 'Gagal scraping', 'Scraping_Method_New': 'failed'})
         
+        # --- Smart Text Selection for Analysis ---
         analysis_text, analysis_source = "", "none"
-        title = result.get('Title_New', row.get('Title', ''))
+        title = result.get('Judul_New', row.get('Judul', '')) # Use existing or new title
+        has_valid_content = scraping_success and content and len(content.strip()) > 100
+        has_valid_title = title and title != 'Gagal'
+        
+        if config['analysis_source_option'] == 'Hanya Judul':
+            if has_valid_title:
+                analysis_text, analysis_source = title, "title_only"
+            elif snippet:
+                analysis_text, analysis_source = snippet, "snippet_fallback"
+        else: # Teks Lengkap (Fallback ke Judul)
+            if has_valid_content:
+                analysis_text, analysis_source = content, "content"
+            elif has_valid_title:
+                analysis_text, analysis_source = title, "title_fallback"
+            elif snippet:
+                analysis_text, analysis_source = snippet, "snippet_fallback"
 
-        if scraping_success and content:
-            analysis_text, analysis_source = content, "scraped_content"
-        elif title:
-            analysis_text, analysis_source = title, "title"
-        elif snippet:
-            analysis_text, analysis_source = snippet, "snippet"
+        result['Analysis_Source_New'] = analysis_source
 
+        # --- Run Analyses on the selected text ---
         if config['enable_journalist'] and analysis_text:
             result['Journalist_New'] = self.journalist_detector.detect_journalist(article_data, analysis_text)
-            result['Journalist_Source'] = analysis_source
 
         if config['enable_sentiment'] and config['sentiment_context'] and analysis_text:
             sentiment = self.sentiment_analyzer.analyze_sentiment(analysis_text, config['sentiment_context'])
             if sentiment:
                 result.update({
                     'Sentiment_New': sentiment.get('sentiment', 'Gagal'), 'Confidence_New': sentiment.get('confidence', ''),
-                    'Reasoning_New': sentiment.get('reasoning', ''), 'Sentiment_Source': analysis_source
+                    'Reasoning_New': sentiment.get('reasoning', '')
                 })
             else:
-                result.update({'Sentiment_New': 'Gagal AI', 'Sentiment_Source': analysis_source})
+                result.update({'Sentiment_New': 'Gagal AI'})
 
-        if config['enable_summarize'] and len(analysis_text.strip()) > 200:
+        if config['enable_summarize'] and len(analysis_text.strip()) > 50:
             summary = self.summarizer.summarize_article(analysis_text, config['summarize_config'])
             result['Summary_New'] = summary.get('summary', 'Gagal') if summary else 'Gagal AI'
-            result['Summary_Source'] = analysis_source
+
+        if config['enable_categorization'] and analysis_text and config.get('categorization_config', {}).get('categories_with_desc'):
+            category = self.category_analyzer.analyze_category(analysis_text, config['categorization_config']['categories_with_desc'])
+            result['Category_New'] = category
         
         return result
     
@@ -335,6 +405,8 @@ class NewsAnalyzerApp:
             'Confidence_New': 'Confidence',
             'Reasoning_New': 'Reasoning',
             'Summary_New': 'Summary',
+            'Category_New': 'Category',
+            'Analysis_Source_New': 'Analysis_Source',
             'Scraping_Method_New': 'Scraping_Method'
         }
         df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, inplace=True)
@@ -363,6 +435,7 @@ class NewsAnalyzerApp:
             'URL': 'URL',
             'Media': 'Media',
             'Title': 'Judul',
+            'Category': 'Kategori',
             'Publish_Date': 'Tanggal Rilis',
             'Journalist': 'Reporter',
             'Content': 'Isi',
@@ -370,6 +443,7 @@ class NewsAnalyzerApp:
             'Confidence': 'Confidence',
             'Reasoning': 'Reasoning',
             'Summary': 'Summary',
+            'Analysis_Source': 'Sumber Analisis',
             'Scraping_Method': 'Scraping_Method'
         }
         
@@ -378,8 +452,8 @@ class NewsAnalyzerApp:
 
         # 3. Define the final column order based on user request
         final_desired_order = [
-            'URL', 'Media', 'Judul', 'Tanggal Rilis', 'Reporter', 'Isi',
-            'Sentiment', 'Confidence', 'Reasoning', 'Summary', 'Scraping_Method'
+            'URL', 'Media', 'Judul', 'Kategori', 'Tanggal Rilis', 'Reporter', 'Isi',
+            'Sentiment', 'Confidence', 'Reasoning', 'Summary', 'Sumber Analisis', 'Scraping_Method'
         ]
         
         # Get a list of original columns to keep them at the end
@@ -426,7 +500,7 @@ class NewsAnalyzerApp:
             success_rate = (scraping_success / total_count * 100) if total_count > 0 else 0
             col2.metric("Scraping Berhasil", f"{scraping_success}/{total_count}", f"{success_rate:.1f}%")
         
-        active_funcs = {'📄 Full Teks': 'enable_scraping', '📅 Tanggal': 'enable_date', '😊 Sentimen': 'enable_sentiment', '👤 Jurnalis': 'enable_journalist', '📝 Summarize': 'enable_summarize'}
+        active_funcs = {'📄 Full Teks': 'enable_scraping', '📅 Tanggal': 'enable_date', '😊 Sentimen': 'enable_sentiment', '👤 Jurnalis': 'enable_journalist', '📝 Summarize': 'enable_summarize', '📊 Kategori': 'enable_categorization'}
         st.info(f"**Fungsi Aktif:** {' | '.join([f for f, e in active_funcs.items() if config.get(e)])}")
 
     def display_export_section(self, df: pd.DataFrame, config: Dict, is_excel_data: bool):
@@ -438,7 +512,7 @@ class NewsAnalyzerApp:
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         data_type = "excel" if is_excel_data else "manual"
-        features = "_".join(k for k, v in {'ft': 'enable_scraping', 'sent': 'enable_sentiment', 'jour': 'enable_journalist', 'sum': 'enable_summarize'}.items() if config.get(v))
+        features = "_".join(k for k, v in {'ft': 'enable_scraping', 'sent': 'enable_sentiment', 'jour': 'enable_journalist', 'sum': 'enable_summarize', 'cat': 'enable_categorization'}.items() if config.get(v))
         filename = f"news_analysis_{data_type}_{features}_{timestamp}.xlsx"
         
         st.download_button(
