@@ -5,8 +5,8 @@ nest_asyncio
 beautifulsoup4
 newspaper3k
 playwright
+playwright_stealth
 openai
 python-dotenv
 requests
 lxml_html_clean
-playwright_stealth

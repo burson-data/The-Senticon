@@ -28,6 +28,8 @@ Sebelum memproses data, atur terlebih dahulu fungsi analisis apa saja yang ingin
 - **😊 Analisis Sentimen**
   - **Fungsi:** Menganalisis sentimen (positif, negatif, netral) dari teks berita terhadap suatu topik.
   - **Penting:** Fungsi ini **wajib** diisi dengan **Konteks Sentimen**. Tanpa konteks, AI tidak tahu harus menganalisis sentimen terhadap apa.
+  - **Opsi Lanjutan:**
+    - **Sumber Analisis:** Anda dapat memilih antara menganalisis **"Teks Lengkap (Default)"** atau **"Hanya Judul"**. Analisis berdasarkan judul lebih cepat dan hemat biaya, namun mungkin kurang akurat dibandingkan teks lengkap.
   - **Contoh Konteks:** `Harga BBM`, `Produk Mobil Listrik`, `Kebijakan Pemerintah`.
 
 - **👤 Deteksi Jurnalis**

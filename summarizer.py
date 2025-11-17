@@ -34,24 +34,34 @@ class ArticleSummarizer:
         focus_instruction = f"\nFocus specifically on: {focus_aspect}" if focus_aspect else ""
         
         return f"""
-        Summarize the following article according to these requirements:
-        
+        Summarize the following article according to these requirements.
+
         REQUIREMENTS:
         - {type_instruction}
         - {lang_instruction}
         - Maximum {max_length} words
         {focus_instruction}
-        
+
         ARTICLE:
         {content}
-        
-        Please provide only the summary text without any additional formatting or explanations.
+
+        Provide the output in a valid JSON format with the following structure:
+        {{
+            "summary": "Your generated summary here."
+        }}
         """
 
     def _parse_summary_response(self, response_text: str) -> Dict:
-        summary = response_text.strip()
-        word_count = len(summary.split())
-        return {"summary": summary, "word_count": word_count}
+        try:
+            data = json.loads(response_text)
+            summary = data.get("summary", "").strip()
+            word_count = len(summary.split())
+            return {"summary": summary, "word_count": word_count}
+        except (json.JSONDecodeError, AttributeError):
+            # Handle cases where response is not valid JSON or not a string
+            summary = response_text.strip()
+            word_count = len(summary.split())
+            return {"summary": "Gagal parsing JSON response.", "word_count": 0}
 
     def summarize_article(self, content: str, config: Dict) -> Optional[Dict]:
         if not self.client:
@@ -66,6 +76,7 @@ class ArticleSummarizer:
                 messages=[
                     {"role": "user", "content": prompt}
                 ],
+                response_format={"type": "json_object"},
                 temperature=0.5,
                 timeout=120
             )
